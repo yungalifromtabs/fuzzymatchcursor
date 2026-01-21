@@ -28,3 +28,24 @@ Continue building your app on:
 2. Deploy your chats from the v0 interface
 3. Changes are automatically pushed to this repository
 4. Vercel deploys the latest version from this repository
+
+## Python Virtual Environment
+
+**Important:** Do not commit the `venv/` directory to git. It is already in `.gitignore`.
+
+To set up the Python virtual environment locally:
+
+```bash
+# Create virtual environment
+python3 -m venv venv
+
+# Activate it
+source venv/bin/activate  # On macOS/Linux
+# or
+venv\Scripts\activate  # On Windows
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+The virtual environment is used by the CSV matching script and should be created locally, not committed to the repository.
