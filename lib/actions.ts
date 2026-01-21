@@ -40,97 +40,117 @@ export async function runPythonScript(formData: FormData) {
     // Read file contents from the request
     const bytes = await file.arrayBuffer()
     const buffer = Buffer.from(bytes)
+    const csvBase64 = buffer.toString("base64")
     
-    // Use /tmp on Vercel, os.tmpdir() elsewhere
-    const tempDir = getTempDir()
+    const isVercel = !!process.env.VERCEL
     
-    // Sanitize filename to prevent path traversal
-    const safeInputName = sanitizeFilename(file.name)
-    const safeOutputName = sanitizeFilename(`matched_${file.name}`)
-    
-    const tempFilePath = path.join(tempDir, safeInputName)
-    const outputFilePath = path.join(tempDir, safeOutputName)
-    
-    // Write uploaded file to temp directory
-    await writeFile(tempFilePath, new Uint8Array(buffer))
-
-    try {
-      // Determine Python and script paths
-      // On Vercel, use system python3 (venv won't be available)
-      // On local, try venv first, fallback to system python3
-      const isVercel = !!process.env.VERCEL
-      let pythonPath = "python3"
-      let pythonScriptPath = path.join(process.cwd(), "scripts", "process_csv.py")
+    if (isVercel) {
+      // On Vercel, call the Python serverless function via HTTP
+      // Use absolute URL for server-side fetch
+      const baseUrl = process.env.VERCEL_URL 
+        ? `https://${process.env.VERCEL_URL}`
+        : process.env.NEXT_PUBLIC_VERCEL_URL
+        ? `https://${process.env.NEXT_PUBLIC_VERCEL_URL}`
+        : 'http://localhost:3000'
       
-      if (!isVercel) {
+      const apiUrl = `${baseUrl}/api/process-csv`
+      
+      console.log("🔄 Calling Python API on Vercel:", apiUrl)
+      
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          csv_base64: csvBase64,
+        }),
+      })
+      
+      if (!response.ok) {
+        const errorText = await response.text()
+        let errorData
+        try {
+          errorData = JSON.parse(errorText)
+        } catch {
+          errorData = { error: errorText || `HTTP ${response.status}` }
+        }
+        throw new Error(errorData.error || `HTTP ${response.status}`)
+      }
+      
+      const result = await response.json()
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Python script failed')
+      }
+      
+      return {
+        success: true,
+        message: "Python script executed successfully",
+        output: "",
+        outputFileName: result.output_file_name || `matched_${file.name}`,
+        outputBase64: result.output_base64,
+      }
+    } else {
+      // Local development: execute Python directly
+      const tempDir = getTempDir()
+      const safeInputName = sanitizeFilename(file.name)
+      const safeOutputName = sanitizeFilename(`matched_${file.name}`)
+      const tempFilePath = path.join(tempDir, safeInputName)
+      const outputFilePath = path.join(tempDir, safeOutputName)
+      
+      await writeFile(tempFilePath, new Uint8Array(buffer))
+
+      try {
         // Try to use venv if it exists locally
+        let pythonPath = "python3"
         const venvPythonPath = path.join(process.cwd(), "venv", "bin", "python3")
         try {
           await readFile(venvPythonPath)
           pythonPath = venvPythonPath
         } catch {
-          // Venv doesn't exist, use system python3
           pythonPath = "python3"
         }
-      }
-      
-      console.log("🐍 Running Python script on CSV file...")
-      console.log(`Using Python: ${pythonPath}`)
-      console.log(`Input file: ${tempFilePath}`)
-      console.log(`Output file: ${outputFilePath}`)
-      
-      // Run Python script with input and output file paths
-      // Pass environment variables (including OPENAI_API_KEY) to the Python script
-      const { stdout, stderr } = await execAsync(
-        `"${pythonPath}" "${pythonScriptPath}" "${tempFilePath}" "${outputFilePath}"`,
-        {
-          env: {
-            ...process.env,
-            OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
-          },
+        
+        const pythonScriptPath = path.join(process.cwd(), "scripts", "process_csv.py")
+        
+        console.log("🐍 Running Python script locally...")
+        
+        const { stdout, stderr } = await execAsync(
+          `"${pythonPath}" "${pythonScriptPath}" "${tempFilePath}" "${outputFilePath}"`,
+          {
+            env: {
+              ...process.env,
+              OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
+            },
+          }
+        )
+
+        if (stderr && !stderr.includes("DeprecationWarning")) {
+          console.warn("Python script warnings:", stderr)
         }
-      )
 
-      if (stderr && !stderr.includes("DeprecationWarning")) {
-        console.warn("Python script warnings:", stderr)
-      }
-
-      console.log("✅ Python script output:", stdout)
-
-      // Check if output file exists and read it
-      let outputBase64 = ""
-      try {
         const outputBuffer = await readFile(outputFilePath)
-        outputBase64 = outputBuffer.toString("base64")
-      } catch (readError) {
-        console.error("❌ Error reading output file:", readError)
-        throw new Error(`Output file was not created. Python script may have failed. Check: ${outputFilePath}`)
-      }
+        const outputBase64 = outputBuffer.toString("base64")
 
-      return {
-        success: true,
-        message: "Python script executed successfully",
-        output: stdout,
-        outputFileName: safeOutputName,
-        outputBase64: outputBase64,
+        return {
+          success: true,
+          message: "Python script executed successfully",
+          output: stdout,
+          outputFileName: safeOutputName,
+          outputBase64: outputBase64,
+        }
+      } finally {
+        await unlink(tempFilePath).catch(console.error)
+        await unlink(outputFilePath).catch(console.error)
       }
-    } catch (error: any) {
-      console.error("❌ Error running Python script:", error)
-      return {
-        success: false,
-        message: error.message || "Error running Python script",
-        error: error.stderr || error.stdout || String(error),
-      }
-    } finally {
-      // Clean up temporary files
-      await unlink(tempFilePath).catch(console.error)
-      await unlink(outputFilePath).catch(console.error)
     }
-  } catch (error) {
-    console.error("❌ Error processing form:", error)
+  } catch (error: any) {
+    console.error("❌ Error running Python script:", error)
     return {
       success: false,
-      message: error instanceof Error ? error.message : "An unknown error occurred",
+      message: error.message || "Error running Python script",
+      error: error.stderr || error.stdout || String(error),
     }
   }
 }
