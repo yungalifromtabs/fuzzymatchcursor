@@ -1,92 +1,32 @@
 "use server"
 
-import { writeFile, unlink, mkdir, readFile } from "fs/promises"
+import { writeFile, unlink, readFile } from "fs/promises"
 import { exec } from "child_process"
 import { promisify } from "util"
 import path from "path"
+import os from "os"
 
 const execAsync = promisify(exec)
 
+// Sanitize filename to prevent path traversal and invalid characters
+function sanitizeFilename(filename: string): string {
+  // Remove path separators and dangerous characters
+  return filename
+    .replace(/[^a-zA-Z0-9._-]/g, "_")
+    .replace(/^\.+/, "") // Remove leading dots
+    .substring(0, 255) // Limit length
+}
+
+// Get temp directory - use /tmp on Vercel, os.tmpdir() elsewhere
+function getTempDir(): string {
+  // On Vercel, /tmp is the only writable directory
+  // On local/dev, use os.tmpdir() which works cross-platform
+  return process.env.VERCEL ? "/tmp" : os.tmpdir()
+}
+
 export async function processSlideForm(formData: FormData) {
-  try {
-    const file = formData.get("file") as File
-
-    if (!file) {
-      throw new Error("Missing file")
-    }
-
-    // Save uploaded file temporarily
-    const bytes = await file.arrayBuffer()
-    const buffer = Buffer.from(bytes)
-    const tempDir = path.join(process.cwd(), "temp")
-    
-    // Ensure temp directory exists
-    try {
-      await mkdir(tempDir, { recursive: true })
-    } catch (err) {
-      // Directory might already exist, ignore
-    }
-
-    const tempFilePath = path.join(tempDir, file.name)
-    const outputFileName = `matched_${file.name}`
-    const outputFilePath = path.join(tempDir, outputFileName)
-    
-    await writeFile(tempFilePath, new Uint8Array(buffer))
-
-    try {
-      // Path to Python script and virtual environment
-      const pythonScriptPath = path.join(process.cwd(), "scripts", "process_csv.py")
-      const venvPythonPath = path.join(process.cwd(), "venv", "bin", "python3")
-      
-      console.log("🔄 Running fuzzy matching on CSV file...")
-      
-      // Run Python script with input and output file paths using venv Python
-      // Pass environment variables (including OPENAI_API_KEY) to the Python script
-      const { stdout, stderr } = await execAsync(
-        `"${venvPythonPath}" "${pythonScriptPath}" "${tempFilePath}" "${outputFilePath}"`,
-        {
-          env: {
-            ...process.env,
-            OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
-          },
-        }
-      )
-
-      if (stderr && !stderr.includes("DeprecationWarning")) {
-        console.warn("Python script warnings:", stderr)
-      }
-
-      console.log("✅ Matching completed:", stdout)
-
-      // Read the output file to return it
-      const outputBuffer = await readFile(outputFilePath)
-      const outputBase64 = outputBuffer.toString("base64")
-
-      return {
-        success: true,
-        message: "CSV matching completed successfully!",
-        outputFileName: outputFileName,
-        outputBase64: outputBase64,
-      }
-    } catch (error: any) {
-      console.error("❌ Error running matching job:", error)
-      return {
-        success: false,
-        message: error.message || "Error running matching job",
-        error: error.stderr || error.stdout || String(error),
-      }
-    } finally {
-      // Clean up temporary files
-      await unlink(tempFilePath).catch(console.error)
-      await unlink(outputFilePath).catch(console.error)
-    }
-  } catch (error) {
-    console.error("❌ Error processing form:", error)
-    return {
-      success: false,
-      message: error instanceof Error ? error.message : "An unknown error occurred",
-    }
-  }
+  // This function is kept for backward compatibility but uses the same pattern
+  return runPythonScript(formData)
 }
 
 export async function runPythonScript(formData: FormData) {
@@ -97,35 +37,52 @@ export async function runPythonScript(formData: FormData) {
       throw new Error("Missing file")
     }
 
-    // Save uploaded file temporarily
+    // Read file contents from the request
     const bytes = await file.arrayBuffer()
     const buffer = Buffer.from(bytes)
-    const tempDir = path.join(process.cwd(), "temp")
     
-    // Ensure temp directory exists
-    try {
-      await mkdir(tempDir, { recursive: true })
-    } catch (err) {
-      // Directory might already exist, ignore
-    }
-
-    const tempFilePath = path.join(tempDir, file.name)
-    const outputFileName = `matched_${file.name}`
-    const outputFilePath = path.join(tempDir, outputFileName)
+    // Use /tmp on Vercel, os.tmpdir() elsewhere
+    const tempDir = getTempDir()
     
+    // Sanitize filename to prevent path traversal
+    const safeInputName = sanitizeFilename(file.name)
+    const safeOutputName = sanitizeFilename(`matched_${file.name}`)
+    
+    const tempFilePath = path.join(tempDir, safeInputName)
+    const outputFilePath = path.join(tempDir, safeOutputName)
+    
+    // Write uploaded file to temp directory
     await writeFile(tempFilePath, new Uint8Array(buffer))
 
     try {
-      // Path to Python script and virtual environment
-      const pythonScriptPath = path.join(process.cwd(), "scripts", "process_csv.py")
-      const venvPythonPath = path.join(process.cwd(), "venv", "bin", "python3")
+      // Determine Python and script paths
+      // On Vercel, use system python3 (venv won't be available)
+      // On local, try venv first, fallback to system python3
+      const isVercel = !!process.env.VERCEL
+      let pythonPath = "python3"
+      let pythonScriptPath = path.join(process.cwd(), "scripts", "process_csv.py")
+      
+      if (!isVercel) {
+        // Try to use venv if it exists locally
+        const venvPythonPath = path.join(process.cwd(), "venv", "bin", "python3")
+        try {
+          await readFile(venvPythonPath)
+          pythonPath = venvPythonPath
+        } catch {
+          // Venv doesn't exist, use system python3
+          pythonPath = "python3"
+        }
+      }
       
       console.log("🐍 Running Python script on CSV file...")
+      console.log(`Using Python: ${pythonPath}`)
+      console.log(`Input file: ${tempFilePath}`)
+      console.log(`Output file: ${outputFilePath}`)
       
-      // Run Python script with input and output file paths using venv Python
+      // Run Python script with input and output file paths
       // Pass environment variables (including OPENAI_API_KEY) to the Python script
       const { stdout, stderr } = await execAsync(
-        `"${venvPythonPath}" "${pythonScriptPath}" "${tempFilePath}" "${outputFilePath}"`,
+        `"${pythonPath}" "${pythonScriptPath}" "${tempFilePath}" "${outputFilePath}"`,
         {
           env: {
             ...process.env,
@@ -154,7 +111,7 @@ export async function runPythonScript(formData: FormData) {
         success: true,
         message: "Python script executed successfully",
         output: stdout,
-        outputFileName: outputFileName,
+        outputFileName: safeOutputName,
         outputBase64: outputBase64,
       }
     } catch (error: any) {
