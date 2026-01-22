@@ -18,21 +18,51 @@ def handler(request):
     """
     Vercel serverless function handler for processing CSV files.
     Expects JSON body with base64-encoded CSV file.
+    
+    Vercel Python functions receive requests in different formats:
+    - Sometimes as an object with 'body' attribute (string or dict)
+    - Sometimes directly as the request object
     """
     try:
-        # Parse request body - Vercel provides body as string
-        if not hasattr(request, 'body') or not request.body:
+        # Handle different Vercel request formats
+        body = None
+        
+        # Case 1: Request has a 'body' attribute (string or dict)
+        if hasattr(request, 'body'):
+            if isinstance(request.body, str):
+                body = json.loads(request.body)
+            elif isinstance(request.body, dict):
+                body = request.body
+            else:
+                body = request.body
+        
+        # Case 2: Request is a dict directly
+        elif isinstance(request, dict):
+            body = request
+        
+        # Case 3: Try to get body from request attributes
+        else:
+            # Try common request formats
+            if hasattr(request, 'json'):
+                body = request.json
+            elif hasattr(request, 'data'):
+                if isinstance(request.data, str):
+                    body = json.loads(request.data)
+                else:
+                    body = request.data
+            else:
+                # Last resort: try to parse as JSON string
+                try:
+                    body = json.loads(str(request))
+                except:
+                    pass
+        
+        if not body:
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json'},
-                'body': json.dumps({'error': 'Missing request body'})
+                'body': json.dumps({'error': 'Missing or invalid request body'})
             }
-        
-        # Parse JSON from request body
-        if isinstance(request.body, str):
-            body = json.loads(request.body)
-        else:
-            body = request.body
         
         csv_base64 = body.get('csv_base64') if isinstance(body, dict) else None
         col_a = body.get('col_a')

@@ -1,6 +1,7 @@
 "use server"
 
-import { writeFile, unlink, readFile } from "fs/promises"
+import { writeFile, unlink, readFile, access } from "fs/promises"
+import { constants } from "fs"
 import { exec } from "child_process"
 import { promisify } from "util"
 import path from "path"
@@ -113,15 +114,23 @@ export async function runPythonScript(formData: FormData) {
         let pythonPath = "python3"
         const venvPythonPath = path.join(process.cwd(), "venv", "bin", "python3")
         try {
-          await readFile(venvPythonPath)
+          // Check if venv Python executable exists and is accessible
+          await access(venvPythonPath, constants.F_OK)
           pythonPath = venvPythonPath
+          console.log("✅ Using virtual environment Python:", pythonPath)
         } catch {
+          // Venv doesn't exist, use system python3
           pythonPath = "python3"
+          console.log("⚠️  Virtual environment not found, using system python3")
         }
         
         const pythonScriptPath = path.join(process.cwd(), "scripts", "process_csv.py")
         
         console.log("🐍 Running Python script locally...")
+        console.log(`Python: ${pythonPath}`)
+        console.log(`Script: ${pythonScriptPath}`)
+        console.log(`Input: ${tempFilePath}`)
+        console.log(`Output: ${outputFilePath}`)
         
         const { stdout, stderr } = await execAsync(
           `"${pythonPath}" "${pythonScriptPath}" "${tempFilePath}" "${outputFilePath}"`,
