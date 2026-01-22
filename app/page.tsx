@@ -257,7 +257,7 @@ export default function Component() {
       <div className="flex flex-col items-center justify-center min-h-screen">
         <Card className="w-full max-w-md">
           <CardHeader>
-            <CardTitle className="text-center">Placeholder</CardTitle>
+            <CardTitle className="text-center">Customer Matching</CardTitle>
             <p className="text-sm text-gray-600 text-center">
               Upload a CSV file to process
             </p>
