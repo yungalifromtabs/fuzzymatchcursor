@@ -78,7 +78,14 @@ export async function runPythonScript(formData: FormData) {
         throw new Error(errorData.error || `HTTP ${response.status}`)
       }
       
-      const result = await response.json()
+      const responseData = await response.json()
+      
+      // Handle Vercel Python function response format
+      // Response might be wrapped in a 'body' string if it's a serverless function
+      let result = responseData
+      if (responseData.body && typeof responseData.body === 'string') {
+        result = JSON.parse(responseData.body)
+      }
       
       if (!result.success) {
         throw new Error(result.error || 'Python script failed')

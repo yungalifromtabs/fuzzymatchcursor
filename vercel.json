@@ -1,7 +1,0 @@
-{
-  "functions": {
-    "api/process-csv.py": {
-      "runtime": "python3.9"
-    }
-  }
-}

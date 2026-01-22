@@ -1,4 +1,3 @@
-from http.server import BaseHTTPRequestHandler
 import json
 import base64
 import os
@@ -15,65 +14,78 @@ else:
 
 from process_csv import run_matching_job
 
-class handler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        try:
-            # Read request body
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_length)
-            data = json.loads(body.decode('utf-8'))
-            
-            csv_base64 = data.get('csv_base64')
-            col_a = data.get('col_a')
-            col_b = data.get('col_b')
-            
-            if not csv_base64:
-                self.send_response(400)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'error': 'Missing csv_base64'}).encode())
-                return
-            
-            # Decode base64 CSV
-            csv_bytes = base64.b64decode(csv_base64)
-            
-            # Use first 2 columns if not specified
-            if not col_a or not col_b:
-                import csv
-                import io
-                text = csv_bytes.decode('utf-8-sig', errors='replace')
-                reader = csv.DictReader(io.StringIO(text))
-                headers = reader.fieldnames or []
-                if len(headers) < 2:
-                    self.send_response(400)
-                    self.send_header('Content-Type', 'application/json')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({'error': 'CSV must have at least 2 columns'}).encode())
-                    return
-                col_a = headers[0]
-                col_b = headers[1]
-            
-            # Run matching job
-            output_bytes = run_matching_job(csv_bytes, col_a, col_b)
-            
-            # Encode output as base64
-            output_base64 = base64.b64encode(output_bytes).decode('utf-8')
-            
-            # Return success response
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({
+def handler(request):
+    """
+    Vercel serverless function handler for processing CSV files.
+    Expects JSON body with base64-encoded CSV file.
+    """
+    try:
+        # Parse request body - Vercel provides body as string
+        if not hasattr(request, 'body') or not request.body:
+            return {
+                'statusCode': 400,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({'error': 'Missing request body'})
+            }
+        
+        # Parse JSON from request body
+        if isinstance(request.body, str):
+            body = json.loads(request.body)
+        else:
+            body = request.body
+        
+        csv_base64 = body.get('csv_base64') if isinstance(body, dict) else None
+        col_a = body.get('col_a')
+        col_b = body.get('col_b')
+        
+        if not csv_base64:
+            return {
+                'statusCode': 400,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({'error': 'Missing csv_base64 in request body'})
+            }
+        
+        # Decode base64 CSV
+        csv_bytes = base64.b64decode(csv_base64)
+        
+        # Use first 2 columns if not specified
+        if not col_a or not col_b:
+            import csv
+            import io
+            text = csv_bytes.decode('utf-8-sig', errors='replace')
+            reader = csv.DictReader(io.StringIO(text))
+            headers = reader.fieldnames or []
+            if len(headers) < 2:
+                return {
+                    'statusCode': 400,
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': json.dumps({'error': 'CSV must have at least 2 columns'})
+                }
+            col_a = headers[0]
+            col_b = headers[1]
+        
+        # Run matching job
+        output_bytes = run_matching_job(csv_bytes, col_a, col_b)
+        
+        # Encode output as base64
+        output_base64 = base64.b64encode(output_bytes).decode('utf-8')
+        
+        return {
+            'statusCode': 200,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({
                 'success': True,
                 'output_base64': output_base64,
-                'output_file_name': f'matched_output.csv'
-            }).encode())
-            
-        except Exception as e:
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({
+                'output_file_name': 'matched_output.csv'
+            })
+        }
+        
+    except Exception as e:
+        return {
+            'statusCode': 500,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({
                 'success': False,
                 'error': str(e)
-            }).encode())
+            })
+        }
