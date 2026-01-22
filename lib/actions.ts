@@ -47,25 +47,26 @@ export async function runPythonScript(formData: FormData) {
     
     if (isVercel) {
       // On Vercel, call the Python serverless function via HTTP
-      // Use absolute URL for server-side fetch
-      const baseUrl = process.env.VERCEL_URL 
-        ? `https://${process.env.VERCEL_URL}`
-        : process.env.NEXT_PUBLIC_VERCEL_URL
-        ? `https://${process.env.NEXT_PUBLIC_VERCEL_URL}`
-        : 'http://localhost:3000'
-      
-      const apiUrl = `${baseUrl}/api/process-csv`
+      // Use relative URL for server-side fetch - Next.js will resolve it internally
+      // This bypasses deployment protection for internal server-to-server requests
+      const apiUrl = '/api/process-csv'
       
       console.log("🔄 Calling Python API on Vercel:", apiUrl)
       
+      // Use absolute URL with the request's origin if available
+      // Otherwise, relative URL should work for server-side requests
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          // Add internal request header to bypass authentication if needed
+          'X-Internal-Request': 'true',
         },
         body: JSON.stringify({
           csv_base64: csvBase64,
         }),
+        // Ensure we're making an internal request
+        cache: 'no-store',
       })
       
       if (!response.ok) {

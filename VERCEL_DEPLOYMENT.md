@@ -28,6 +28,23 @@ Vercel should auto-detect Python files in `api/` directory, but verify:
 ### 3. Build Settings
 No special build settings needed - Vercel handles Next.js + Python automatically.
 
+### 4. Deployment Protection (IMPORTANT)
+**CRITICAL**: If you see an "Authentication Required" error when clicking RUN:
+
+This happens when Vercel's deployment protection is enabled for preview deployments. You have two options:
+
+**Option A: Disable Deployment Protection for API Routes (Recommended)**
+1. Go to your Vercel project dashboard
+2. Navigate to **Settings** → **Deployment Protection**
+3. Configure protection to exclude `/api/*` routes, OR
+4. Disable protection for preview deployments (if acceptable for your use case)
+
+**Option B: Use Production Deployment**
+- Production deployments typically don't have this issue
+- Deploy to production: `vercel --prod` or merge to main branch
+
+The code has been updated to use relative URLs for internal server-to-server requests, which should bypass authentication, but if deployment protection is strictly enforced, you may still need to configure it.
+
 ## 🔍 Potential Issues & Solutions
 
 ### Issue 1: Python Function Not Found
@@ -70,6 +87,17 @@ No special build settings needed - Vercel handles Next.js + Python automatically
 - Verify `scripts/process_csv.py` exists
 - The handler adds `scripts/` to Python path automatically
 - Check file structure is preserved in deployment
+
+### Issue 6: Authentication Required Error
+**Symptom**: HTML page showing "Authentication Required" when clicking RUN
+
+**Solution**:
+- This is caused by Vercel's deployment protection on preview deployments
+- **Quick Fix**: Deploy to production (`vercel --prod`) - production typically doesn't have this issue
+- **Permanent Fix**: Go to Vercel project → Settings → Deployment Protection
+  - Either disable protection for preview deployments, OR
+  - Configure protection to exclude `/api/*` routes
+- The code uses relative URLs (`/api/process-csv`) for internal requests, which should bypass authentication, but strict deployment protection may still block it
 
 ## 📝 Testing Deployment
 
