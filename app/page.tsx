@@ -246,7 +246,7 @@ export default function Component() {
       {/* Logo in corner */}
       <div className="absolute top-4 left-4">
         <div className="flex items-center space-x-2">
-          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#14F0F7' }}>
             <span className="text-white font-bold text-sm">T</span>
           </div>
           <span className="font-semibold text-gray-900">Tabs</span>
