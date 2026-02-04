@@ -55,6 +55,19 @@ WS_RE = re.compile(r"\s+")
 
 
 # ----------------------------
+# Progress logging
+# ----------------------------
+
+def log_progress(stage: str, message: str, percent: int = None):
+    """
+    Log progress to stderr in a parseable format.
+    Format: [PROGRESS] stage|message|percent
+    """
+    percent_str = str(percent) if percent is not None else ""
+    print(f"[PROGRESS] {stage}|{message}|{percent_str}", file=sys.stderr, flush=True)
+
+
+# ----------------------------
 # Cleaning / normalization
 # ----------------------------
 
@@ -206,11 +219,15 @@ def get_embeddings_for_list(client: OpenAI, texts: List[str], model: str, chunk_
     # Get embeddings for non-empty texts
     all_embeddings: List[List[float]] = []
     if non_empty_texts:
+        total_chunks = (len(non_empty_texts) + chunk_size - 1) // chunk_size
+        chunk_num = 0
         for chunk in chunk_list(non_empty_texts, chunk_size):
+            chunk_num += 1
             # Filter out any empty strings from chunk (safety check)
             filtered_chunk = [t for t in chunk if t and t.strip()]
             if not filtered_chunk:
                 continue
+            log_progress("embedding", f"Getting embeddings batch {chunk_num}/{total_chunks} ({len(all_embeddings)}/{len(non_empty_texts)} values)")
             resp = client.embeddings.create(input=filtered_chunk, model=model)
             all_embeddings.extend([d.embedding for d in resp.data])
     
@@ -250,46 +267,73 @@ def ai_match_batch_embeddings(
     if not unmatched_sources_original:
         return []
 
-    # Embed
+    # Embed Column A (unmatched values)
+    log_progress("ai_embedding_a", f"Getting embeddings for Column A ({len(unmatched_sources_original)} values)...", 40)
     emb_a = get_embeddings_for_list(client, unmatched_sources_original, cfg.embedding_model, cfg.chunk_size)
+    
+    # Embed Column B (reference values)
+    log_progress("ai_embedding_b", f"Getting embeddings for Column B ({len(ref_values_original)} values)...", 60)
     emb_b = get_embeddings_for_list(client, ref_values_original, cfg.embedding_model, cfg.chunk_size)
 
+    log_progress("similarity", f"Computing similarity matrix ({len(unmatched_sources_original)} x {len(ref_values_original)})...", 80)
+    emb_a_np = np.array(emb_a, dtype=np.float32)
     emb_b_np = np.array(emb_b, dtype=np.float32)
 
     results: List[Dict[str, Any]] = []
     local_used: Set[int] = set(used_b_indices)  # don't reuse B that exact-match already consumed
 
-    for a_text, a_emb in zip(unmatched_sources_original, emb_a):
-        scores = cosine_similarity([a_emb], emb_b_np)[0]  # shape: (len(B),)
-
-        if not cfg.allow_many_to_one_ai:
-            # Try to find the best unused match first
-            unused_scores = scores.copy()
-            for j in local_used:
-                unused_scores[j] = -1.0
+    # Compute similarity matrix in chunks to avoid memory issues
+    # For 40k x 40k at float32, full matrix would be ~6GB - too much
+    # Use chunks of 1000 rows at a time
+    CHUNK_SIZE = 1000
+    num_chunks = (len(unmatched_sources_original) + CHUNK_SIZE - 1) // CHUNK_SIZE
+    
+    log_progress("matching", f"Finding best matches for {len(unmatched_sources_original)} values...", 85)
+    
+    for chunk_idx in range(num_chunks):
+        start_idx = chunk_idx * CHUNK_SIZE
+        end_idx = min(start_idx + CHUNK_SIZE, len(unmatched_sources_original))
+        
+        # Compute similarities for this chunk all at once (vectorized)
+        chunk_emb_a = emb_a_np[start_idx:end_idx]
+        chunk_similarities = cosine_similarity(chunk_emb_a, emb_b_np)  # shape: (chunk_size, len(B))
+        
+        # Update progress
+        pct = 85 + int(5 * end_idx / len(unmatched_sources_original))
+        log_progress("matching", f"Matched {end_idx}/{len(unmatched_sources_original)} values...", pct)
+        
+        # Process each row in the chunk
+        for local_i, scores in enumerate(chunk_similarities):
+            i = start_idx + local_i
             
-            if np.max(unused_scores) > -1.0:
-                # Found an unused match
-                max_idx = int(np.argmax(unused_scores))
-                best_score = float(unused_scores[max_idx])
+            if not cfg.allow_many_to_one_ai:
+                # Try to find the best unused match first
+                unused_scores = scores.copy()
+                for j in local_used:
+                    unused_scores[j] = -1.0
+                
+                if np.max(unused_scores) > -1.0:
+                    # Found an unused match
+                    max_idx = int(np.argmax(unused_scores))
+                    best_score = float(unused_scores[max_idx])
+                else:
+                    # All B values are used, fallback to best match overall (allow reuse)
+                    max_idx = int(np.argmax(scores))
+                    best_score = float(scores[max_idx])
             else:
-                # All B values are used, fallback to best match overall (allow reuse)
+                # Many-to-one allowed, just use best match
                 max_idx = int(np.argmax(scores))
                 best_score = float(scores[max_idx])
-        else:
-            # Many-to-one allowed, just use best match
-            max_idx = int(np.argmax(scores))
-            best_score = float(scores[max_idx])
 
-        # Always assign a match (no threshold check)
-        results.append({
-            "best_match": ref_values_original[max_idx],
-            "match_quality": best_score,
-            "b_index": max_idx
-        })
-        
-        if not cfg.allow_many_to_one_ai:
-            local_used.add(max_idx)
+            # Always assign a match (no threshold check)
+            results.append({
+                "best_match": ref_values_original[max_idx],
+                "match_quality": best_score,
+                "b_index": max_idx
+            })
+            
+            if not cfg.allow_many_to_one_ai:
+                local_used.add(max_idx)
 
     return results
 
@@ -306,9 +350,12 @@ def run_matching_job(
 ) -> bytes:
     cfg = cfg or MatchConfig()
 
+    log_progress("parsing", "Parsing CSV file...", 5)
     rows, headers = parse_csv(csv_bytes)
     if col_a not in headers or col_b not in headers:
         raise ValueError(f"CSV must contain selected columns: {col_a}, {col_b}")
+    
+    log_progress("parsing", f"Parsed {len(rows)} rows with columns: {col_a}, {col_b}", 10)
 
     # Originals preserved
     a_original = [(r.get(col_a, "") or "") for r in rows]
@@ -326,30 +373,74 @@ def run_matching_job(
             swapped = True
 
     # Normalized keys for matching only
+    log_progress("normalizing", "Normalizing text values...", 15)
     a_norm = normalize_list(a_original, cfg)
     b_norm = normalize_list(b_original, cfg)
 
-    # Pass 1: exact match
-    best_match, match_style, match_quality, used_b_indices = exact_match_pass(
-        source_original=a_original,
-        source_norm=a_norm,
+    # Initialize result arrays
+    best_match: List[Optional[str]] = [None] * len(rows)
+    match_style: List[str] = [""] * len(rows)
+    match_quality: List[float] = [0.0] * len(rows)
+    is_duplicate: List[bool] = [False] * len(rows)
+    
+    # Track duplicates in Column A - map normalized value to first occurrence index
+    # Also track matches for duplicates: norm_value -> (best_match, match_style, match_quality)
+    first_occurrence: Dict[str, int] = {}
+    duplicate_indices: List[int] = []
+    unique_indices: List[int] = []
+    
+    log_progress("duplicates", "Detecting duplicates in Column A...", 18)
+    for i, norm_val in enumerate(a_norm):
+        if norm_val in first_occurrence:
+            # This is a duplicate
+            is_duplicate[i] = True
+            duplicate_indices.append(i)
+        else:
+            # First occurrence of this value
+            first_occurrence[norm_val] = i
+            unique_indices.append(i)
+    
+    duplicate_count = len(duplicate_indices)
+    if duplicate_count > 0:
+        log_progress("duplicates", f"Found {duplicate_count} duplicate values in Column A", 19)
+    
+    # Only process unique values for matching
+    unique_a_original = [a_original[i] for i in unique_indices]
+    unique_a_norm = [a_norm[i] for i in unique_indices]
+
+    # Pass 1: exact match (only for unique values)
+    log_progress("exact_match", "Running exact match pass...", 20)
+    unique_best_match, unique_match_style, unique_match_quality, used_b_indices = exact_match_pass(
+        source_original=unique_a_original,
+        source_norm=unique_a_norm,
         ref_original=b_original,
         ref_norm=b_norm,
     )
+    
+    # Map unique results back to full arrays
+    for j, idx in enumerate(unique_indices):
+        best_match[idx] = unique_best_match[j]
+        match_style[idx] = unique_match_style[j]
+        match_quality[idx] = unique_match_quality[j]
+    
+    exact_count = sum(1 for m in unique_best_match if m is not None)
+    log_progress("exact_match", f"Found {exact_count} exact matches", 25)
 
-    # Unmatched A rows - include all rows that don't have a match yet
-    # For empty A values, we'll still try to match them
-    unmatched_indices = [i for i, bm in enumerate(best_match) if bm is None]
-    unmatched_sources_original = [a_original[i] for i in unmatched_indices]
+    # Unmatched unique A rows - include all rows that don't have a match yet
+    unmatched_unique_indices = [i for i, bm in enumerate(unique_best_match) if bm is None]
+    unmatched_sources_original = [unique_a_original[i] for i in unmatched_unique_indices]
 
-    # Pass 2: AI embeddings - match all unmatched rows
+    # Pass 2: AI embeddings - match all unmatched unique rows
     if unmatched_sources_original:
+        log_progress("ai_setup", f"Preparing AI matching for {len(unmatched_sources_original)} unmatched rows...", 30)
+        
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise RuntimeError("Missing OPENAI_API_KEY environment variable")
 
         client = OpenAI(api_key=api_key)
 
+        log_progress("ai_embedding", f"Starting AI embedding process (this is the longest step)...", 35)
         ai_results = ai_match_batch_embeddings(
             client,
             unmatched_sources_original,
@@ -357,29 +448,58 @@ def run_matching_job(
             used_b_indices=used_b_indices,
             cfg=cfg
         )
+        log_progress("ai_complete", f"AI matching complete", 90)
 
-        for j, idx in enumerate(unmatched_indices):
+        # Map AI results back to unique indices, then to full arrays
+        for j, unique_idx in enumerate(unmatched_unique_indices):
             res = ai_results[j] if j < len(ai_results) else {}
             bm = res.get("best_match")
             q = res.get("match_quality")
 
+            # Get the actual row index from unique_indices
+            actual_idx = unique_indices[unique_idx]
+            
             # Always assign a match (greedy matching ensures this)
-            # If somehow we don't have a match, use empty string (shouldn't happen)
-            best_match[idx] = str(bm) if bm else ""
-            match_style[idx] = "ai"
-            match_quality[idx] = float(q) if q is not None else 0.0
+            best_match[actual_idx] = str(bm) if bm else ""
+            match_style[actual_idx] = "ai"
+            match_quality[actual_idx] = float(q) if q is not None else 0.0
     
-    # Ensure all rows have a best_match (fallback for any remaining None values)
-    for i in range(len(best_match)):
-        if best_match[i] is None:
-            # Fallback: use the first available B value or empty string
+    # Ensure all unique rows have a best_match (fallback for any remaining None values)
+    for idx in unique_indices:
+        if best_match[idx] is None:
             if b_original:
-                best_match[i] = b_original[0] if b_original[0] else ""
+                best_match[idx] = b_original[0] if b_original[0] else ""
             else:
-                best_match[i] = ""
-            match_style[i] = "ai"
-            match_quality[i] = 0.0
+                best_match[idx] = ""
+            match_style[idx] = "ai"
+            match_quality[idx] = 0.0
+    
+    # Pass 3: Propagate matches to duplicate rows
+    if duplicate_indices:
+        log_progress("duplicates", f"Applying matches to {len(duplicate_indices)} duplicate rows...", 92)
+        
+        # Build lookup from normalized value to match info
+        norm_to_match: Dict[str, Tuple[str, str, float]] = {}
+        for idx in unique_indices:
+            norm_val = a_norm[idx]
+            norm_to_match[norm_val] = (best_match[idx] or "", match_style[idx], match_quality[idx])
+        
+        # Apply matches to duplicates
+        for idx in duplicate_indices:
+            norm_val = a_norm[idx]
+            if norm_val in norm_to_match:
+                match_info = norm_to_match[norm_val]
+                best_match[idx] = match_info[0]
+                match_style[idx] = match_info[1]
+                match_quality[idx] = match_info[2]
+            else:
+                # Fallback (shouldn't happen)
+                best_match[idx] = ""
+                match_style[idx] = "ai"
+                match_quality[idx] = 0.0
 
+    log_progress("output", "Generating output CSV...", 97)
+    
     # Output CSV with required columns (no match_key)
     out_headers = [
         col_a,
@@ -387,6 +507,7 @@ def run_matching_job(
         "best_match",
         "match_style",
         "match_quality",
+        "duplicate",
         "columns_swapped",
     ]
 
@@ -401,9 +522,11 @@ def run_matching_job(
             "best_match": best_match[i] or "",
             "match_style": match_style[i],
             "match_quality": match_quality[i],
+            "duplicate": "TRUE" if is_duplicate[i] else "FALSE",
             "columns_swapped": "true" if swapped else "false",
         })
 
+    log_progress("finalizing", f"Finalizing output ({len(rows)} rows)...", 99)
     return out.getvalue().encode("utf-8")
 
 
