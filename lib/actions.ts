@@ -58,11 +58,21 @@ export async function runPythonScript(formData: FormData) {
       
       console.log("🔄 Calling Python API on Vercel:", apiUrl)
       
+      // Add bypass token for deployment protection on preview deployments
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      }
+      
+      // Use bypass token if available (for preview deployments with protection)
+      const bypassToken = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+      if (bypassToken) {
+        headers['x-vercel-protection-bypass'] = bypassToken
+        console.log("🔓 Using deployment protection bypass token")
+      }
+      
       const response = await fetch(apiUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           csv_base64: csvBase64,
         }),

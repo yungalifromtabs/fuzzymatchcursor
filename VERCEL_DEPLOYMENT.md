@@ -88,16 +88,26 @@ The code has been updated to use relative URLs for internal server-to-server req
 - The handler adds `scripts/` to Python path automatically
 - Check file structure is preserved in deployment
 
-### Issue 6: Authentication Required Error
-**Symptom**: HTML page showing "Authentication Required" when clicking RUN
+### Issue 6: Authentication Required Error (HTTP 401)
+**Symptom**: HTML page showing "Authentication Required" when clicking RUN, or error logs showing:
+```
+POST 401 /api/process-csv
+Error: <!doctype html><html lang=en>...Authentication Required...
+```
 
 **Solution**:
-- This is caused by Vercel's deployment protection on preview deployments
-- **Quick Fix**: Deploy to production (`vercel --prod`) - production typically doesn't have this issue
-- **Permanent Fix**: Go to Vercel project → Settings → Deployment Protection
-  - Either disable protection for preview deployments, OR
-  - Configure protection to exclude `/api/*` routes
-- The code uses relative URLs (`/api/process-csv`) for internal requests, which should bypass authentication, but strict deployment protection may still block it
+This is caused by Vercel's **Deployment Protection** blocking internal API calls on preview deployments.
+
+**✅ Automatic Fix (Applied)**:
+- The code now automatically uses `VERCEL_AUTOMATION_BYPASS_SECRET` environment variable
+- This is set by Vercel automatically on all deployments
+- The bypass token is added to internal API calls via the `x-vercel-protection-bypass` header
+- **No manual configuration needed!**
+
+**Alternative Solutions** (if automatic bypass doesn't work):
+1. **Deploy to Production**: `vercel --prod` - production deployments often don't have this issue
+2. **Disable Protection**: Go to Vercel project → Settings → Deployment Protection → Disable for preview deployments
+3. **Manual Bypass**: Set a custom bypass token in your Vercel project settings
 
 ## 📝 Testing Deployment
 
