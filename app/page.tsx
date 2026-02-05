@@ -165,15 +165,20 @@ export default function Component() {
       setTimeRemaining(Math.ceil(estimatedTotalTimeRef.current))
       
       // Progress stages with realistic timing (as percentage of total time)
+      // Include row counts for more informative messages
+      const colACount = rowCounts?.colA || 0
+      const colBCount = rowCounts?.colB || 0
       const stages = [
         { timePercent: 0.02, message: "Uploading file..." },
-        { timePercent: 0.05, message: "Parsing CSV..." },
-        { timePercent: 0.10, message: "Running exact matching..." },
-        { timePercent: 0.20, message: "Preparing AI embeddings..." },
-        { timePercent: 0.55, message: "Getting embeddings from OpenAI..." },
-        { timePercent: 0.75, message: "Computing similarity scores..." },
-        { timePercent: 0.90, message: "Matching rows..." },
-        { timePercent: 0.95, message: "Generating output file..." },
+        { timePercent: 0.05, message: `Parsing CSV (${colACount + colBCount} total rows)...` },
+        { timePercent: 0.10, message: "Finding exact matches..." },
+        { timePercent: 0.15, message: "Preparing AI matching..." },
+        { timePercent: 0.25, message: `Getting embeddings for Column A (${colACount.toLocaleString()} values)...` },
+        { timePercent: 0.50, message: `Getting embeddings for Column B (${colBCount.toLocaleString()} values)...` },
+        { timePercent: 0.70, message: `Computing similarity matrix (${colACount.toLocaleString()} × ${colBCount.toLocaleString()})...` },
+        { timePercent: 0.85, message: `Finding best matches for ${colACount.toLocaleString()} values...` },
+        { timePercent: 0.95, message: "Generating output CSV..." },
+        { timePercent: 0.98, message: "Finalizing output..." },
       ]
       
       progressIntervalRef.current = setInterval(() => {
@@ -543,9 +548,9 @@ export default function Component() {
           <Card className="w-full max-w-md mt-4">
             <CardContent className="pt-6">
               <div className="space-y-2">
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-gray-600">{progressMessage}</span>
-                  <span className="text-gray-500">{progress.toFixed(0)}%</span>
+                <div className="flex justify-between items-start gap-3 text-sm">
+                  <span className="text-gray-600 flex-1 leading-snug">{progressMessage}</span>
+                  <span className="text-gray-500 font-medium shrink-0">{progress.toFixed(0)}%</span>
                 </div>
                 <Progress value={progress} className="h-2" />
                 {rowCounts && (rowCounts.colA + rowCounts.colB) > 1000 && progress < 50 && (
