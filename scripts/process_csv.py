@@ -388,19 +388,30 @@ def run_matching_job(
     first_occurrence: Dict[str, int] = {}
     duplicate_indices: List[int] = []
     unique_indices: List[int] = []
+    value_counts: Dict[str, int] = {}  # Track how many times each value appears
     
     log_progress("duplicates", "Detecting duplicates in Column A...", 18)
+    
+    # First pass: count occurrences
+    for norm_val in a_norm:
+        if norm_val:
+            value_counts[norm_val] = value_counts.get(norm_val, 0) + 1
+    
+    # Second pass: mark duplicates and identify unique/duplicate indices
     for i, norm_val in enumerate(a_norm):
         if norm_val in first_occurrence:
-            # This is a duplicate
-            is_duplicate[i] = True
+            # This is a subsequent duplicate
             duplicate_indices.append(i)
         else:
             # First occurrence of this value
             first_occurrence[norm_val] = i
             unique_indices.append(i)
+        
+        # Mark as duplicate if this value appears more than once (including first instance)
+        if norm_val and value_counts.get(norm_val, 0) > 1:
+            is_duplicate[i] = True
     
-    duplicate_count = len(duplicate_indices)
+    duplicate_count = sum(1 for d in is_duplicate if d)
     if duplicate_count > 0:
         log_progress("duplicates", f"Found {duplicate_count} duplicate values in Column A", 19)
     
@@ -501,12 +512,16 @@ def run_matching_job(
     log_progress("output", "Generating output CSV...", 97)
     
     # Output CSV with required columns (no match_key)
+    # Use original column names and append "_best_match" to Column B name
+    best_match_col = f"{col_b}_best_match"
+    
     out_headers = [
         col_a,
         col_b,
-        "best_match",
+        best_match_col,
         "match_style",
         "match_quality",
+        "match_status",
         "duplicate",
         "columns_swapped",
     ]
@@ -516,12 +531,16 @@ def run_matching_job(
     writer.writeheader()
 
     for i in range(len(rows)):
+        # Determine match status based on quality threshold
+        match_status = "MATCHED" if match_quality[i] > 0.75 else "REVIEW"
+        
         writer.writerow({
             col_a: a_original[i],
             col_b: b_original[i],
-            "best_match": best_match[i] or "",
+            best_match_col: best_match[i] or "",
             "match_style": match_style[i],
             "match_quality": match_quality[i],
+            "match_status": match_status,
             "duplicate": "TRUE" if is_duplicate[i] else "FALSE",
             "columns_swapped": "true" if swapped else "false",
         })

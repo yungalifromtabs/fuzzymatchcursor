@@ -5,10 +5,10 @@ import type React from "react"
 import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Upload, AlertCircle, CheckCircle, Loader2 } from "lucide-react"
 import { runPythonScript } from "@/lib/actions"
 
@@ -430,11 +430,29 @@ export default function Component() {
           <CardHeader>
             <CardTitle className="text-center">Customer Matching</CardTitle>
             <p className="text-sm text-gray-600 text-center">
-              Upload a CSV file to process
+              Upload a CSV with exactly two columns
             </p>
+            
+            {/* How it works accordion */}
+            <Accordion type="single" collapsible className="mt-4">
+              <AccordionItem value="how-it-works" className="border-none">
+                <AccordionTrigger className="text-sm text-green-700 hover:no-underline py-2 justify-center [&>svg]:ml-1.5">
+                  How it works
+                </AccordionTrigger>
+                <AccordionContent className="text-sm text-gray-600 space-y-2 pb-0">
+                  <ol className="list-decimal list-inside space-y-1.5 leading-relaxed">
+                    <li><strong>Upload your CSV</strong> with two columns of data you want to match</li>
+                    <li><strong>Automatic organization:</strong> The shorter column becomes your source list</li>
+                    <li><strong>Exact matching first:</strong> Perfect matches are identified instantly</li>
+                    <li><strong>AI matching:</strong> Remaining values are matched using intelligent similarity analysis</li>
+                    <li><strong>Review results:</strong> A detailed report with match quality scores and recommendations is automatically downloaded</li>
+                  </ol>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
           </CardHeader>
           <CardContent>
-            <div className="space-y-6">
+            <div className="space-y-4">
               {/* Error banner */}
               {error && (
                 <Alert variant="destructive">
@@ -453,7 +471,6 @@ export default function Component() {
 
               {/* File upload */}
               <div className="space-y-2">
-                <Label htmlFor="file-upload">Upload CSV File</Label>
                 <div className="relative">
                   <Input id="file-upload" type="file" accept=".csv" onChange={handleFileChange} className="w-full" />
                   <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
@@ -531,15 +548,8 @@ export default function Component() {
                   <span className="text-gray-500">{progress.toFixed(0)}%</span>
                 </div>
                 <Progress value={progress} className="h-2" />
-                {timeRemaining !== null && timeRemaining > 0 && (
-                  <p className="text-xs text-gray-500 text-center">
-                    Estimated time remaining: {timeRemaining >= 60 
-                      ? `${Math.floor(timeRemaining / 60)}m ${timeRemaining % 60}s` 
-                      : `${timeRemaining}s`}
-                  </p>
-                )}
                 {rowCounts && (rowCounts.colA + rowCounts.colB) > 1000 && progress < 50 && (
-                  <p className="text-xs text-amber-600 text-center">
+                  <p className="text-xs text-amber-600 text-center mt-2">
                     Large dataset detected — processing may take several minutes
                   </p>
                 )}
